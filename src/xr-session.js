@@ -166,6 +166,39 @@ function initLabelContainer() {
   labelContainer.setAttribute("id", "container");
 }
 
+function initPhotoButton() {
+  const btn = document.createElement("button");
+  btn.id = "photo-btn";
+  btn.type = "button";
+  btn.textContent = " ";
+
+  labelContainer.appendChild(btn);
+
+  btn.addEventListener("click", () => {
+    if (!renderer) return;
+
+    try {
+      const canvas = renderer.domElement;
+      const dataUrl = canvas.toDataURL("image/png");
+
+      const a = document.createElement("a");
+      const canDownload = "download" in a;
+
+      if (canDownload) {
+        a.href = dataUrl;
+        a.download = `measure-${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } else {
+        window.open(dataUrl, "_blank");
+      }
+    } catch (e) {
+      console.error("Erreur lors de la capture d'écran AR :", e);
+    }
+  });
+}
+
 function initCamera() {
   camera = new THREE.PerspectiveCamera(70, width / height, 0.01, 20);
 }
@@ -202,6 +235,8 @@ function initXR() {
 
   initLabelContainer();
   container.appendChild(labelContainer);
+
+  initPhotoButton();
 
   document.body.appendChild(
     ARButton.createButton(renderer, {
