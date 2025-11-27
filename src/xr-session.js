@@ -45,26 +45,20 @@ function matrixToVector(matrix) {
 }
 
 function initLine(point) {
-  const positions = [point.x, point.y, point.z, point.x, point.y, point.z];
+  const radius = 0.003;
+  const height = 1; 
 
-  const geometry = new LineGeometry();
-  geometry.setPositions(positions);
+  const geometry = new THREE.CylinderBufferGeometry(radius, radius, height, 8);
+  const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
-  const material = new LineMaterial({
-    color: 0xffffff,
-    linewidth: 0.01,
-    worldUnits: true,
-    dashed: false,
-  });
-  material.resolution.set(width, height);
+  const cylinder = new THREE.Mesh(geometry, material);
 
-  const line = new Line2(geometry, material);
-  line.computeLineDistances();
-  line.visible = true;
-  line.frustumCulled = false;
 
-  return line;
+  cylinder.visible = true;
+
+  return cylinder;
 }
+
 
 function updateLine(matrix) {
   if (!currentLine || measurements.length === 0) return;
@@ -77,11 +71,26 @@ function updateLine(matrix) {
     matrix.elements[14]
   );
 
-  const positions = [start.x, start.y, start.z, end.x, end.y, end.z];
+  const dir = new THREE.Vector3().subVectors(end, start);
+  const length = dir.length();
+  if (length === 0) return;
 
-  currentLine.geometry.setPositions(positions);
-  currentLine.geometry.computeBoundingSphere();
+  const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+  currentLine.position.copy(mid);
+
+  const up = new THREE.Vector3(0, 1, 0);
+  const quat = new THREE.Quaternion().setFromUnitVectors(
+    up,
+    dir.clone().normalize()
+  );
+  currentLine.setRotationFromQuaternion(quat);
+
+
+  currentLine.scale.set(1, length, 1);
+
+  currentLine.updateMatrixWorld();
 }
+
 
 function initReticle() {
   let ring = new THREE.RingBufferGeometry(0.045, 0.05, 32).rotateX(
@@ -196,9 +205,6 @@ function onWindowResize() {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height);
-  if (currentLine && currentLine.material && currentLine.material.resolution) {
-    currentLine.material.resolution.set(width, height);
-  }
 }
 
 function animate() {
