@@ -162,7 +162,7 @@ function initLabelContainer() {
   labelContainer = document.createElement("div");
   labelContainer.style.position = "absolute";
   labelContainer.style.top = "0px";
-  labelContainer.style.pointerEvents = "none";
+  labelContainer.style.pointerEvents = "auto";
   labelContainer.setAttribute("id", "container");
 }
 
@@ -174,7 +174,10 @@ function initPhotoButton() {
 
   labelContainer.appendChild(btn);
 
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+
     if (!renderer) return;
 
     try {
@@ -193,9 +196,15 @@ function initPhotoButton() {
       } else {
         window.open(dataUrl, "_blank");
       }
-    } catch (e) {
-      console.error("Erreur lors de la capture d'écran AR :", e);
+    } catch (err) {
+      console.error("Erreur lors de la capture d'écran AR :", err);
     }
+  });
+
+  ["pointerdown", "touchstart"].forEach((evtName) => {
+    btn.addEventListener(evtName, (e) => {
+      e.stopPropagation();
+    });
   });
 }
 
