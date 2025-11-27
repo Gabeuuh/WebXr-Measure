@@ -87,7 +87,7 @@ function createLabelSprite(message) {
 
   const sprite = new THREE.Sprite(material);
 
-  const scale = 0.15; // ~15 cm de haut, à adapter
+  const scale = 0.06;
   const aspect = w / h;
   sprite.scale.set(scale * aspect, scale, 1);
 
@@ -231,8 +231,13 @@ function onSelect() {
 
       const center = getCenterPoint(measurements);
 
-      const sprite = createLabelSprite(message);
-      sprite.position.copy(center);
+      const upOffset = new THREE.Vector3(0, 0.05, 0);
+      const cameraOffset = new THREE.Vector3();
+      renderer.xr.getCamera(camera).getWorldDirection(cameraOffset);
+
+      cameraOffset.multiplyScalar(-0.015);
+
+      sprite.position.copy(center.clone().add(upOffset).add(cameraOffset));
 
       scene.add(sprite);
       labels.push(sprite);
