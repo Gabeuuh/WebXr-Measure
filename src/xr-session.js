@@ -229,13 +229,15 @@ function onSelect() {
       let distance = Math.round(getDistance(measurements) * 100);
       const message = distance + " cm";
 
+      const sprite = createLabelSprite(message);
+
       const center = getCenterPoint(measurements);
 
-      const upOffset = new THREE.Vector3(0, 0.05, 0);
+      const upOffset = new THREE.Vector3(0, 0.05, 0); // 5 cm au-dessus
+
       const cameraOffset = new THREE.Vector3();
       renderer.xr.getCamera(camera).getWorldDirection(cameraOffset);
-
-      cameraOffset.multiplyScalar(-0.015);
+      cameraOffset.multiplyScalar(-0.015); // 1.5 cm vers la caméra
 
       sprite.position.copy(center.clone().add(upOffset).add(cameraOffset));
 
