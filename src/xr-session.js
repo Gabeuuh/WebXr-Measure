@@ -1,9 +1,6 @@
 import * as THREE from "three";
 import { ARButton } from "three/examples/jsm/webxr/ARButton.js";
 import { BufferGeometryUtils } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { Line2 } from "three/examples/jsm/lines/Line2.js";
-import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
-import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 
 let container, labelContainer;
 let camera, scene, renderer, light;
@@ -44,21 +41,72 @@ function matrixToVector(matrix) {
   return vector;
 }
 
+function createLabelSprite(message) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+
+  const fontSize = 64;
+  ctx.font = `${fontSize}px sans-serif`;
+  const textWidth = ctx.measureText(message).width;
+
+  canvas.width = textWidth + fontSize;
+  canvas.height = fontSize * 1.6;
+
+  ctx.font = `${fontSize}px sans-serif`;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+
+  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+  const radius = fontSize * 0.4;
+  const w = canvas.width;
+  const h = canvas.height;
+
+  ctx.beginPath();
+  ctx.moveTo(radius, 0);
+  ctx.lineTo(w - radius, 0);
+  ctx.quadraticCurveTo(w, 0, w, radius);
+  ctx.lineTo(w, h - radius);
+  ctx.quadraticCurveTo(w, h, w - radius, h);
+  ctx.lineTo(radius, h);
+  ctx.quadraticCurveTo(0, h, 0, h - radius);
+  ctx.lineTo(0, radius);
+  ctx.quadraticCurveTo(0, 0, radius, 0);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = "white";
+  ctx.fillText(message, w / 2, h / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+  });
+
+  const sprite = new THREE.Sprite(material);
+
+  const scale = 0.15; // ~15 cm de haut, à adapter
+  const aspect = w / h;
+  sprite.scale.set(scale * aspect, scale, 1);
+
+  return sprite;
+}
+
 function initLine(point) {
   const radius = 0.003;
-  const height = 1; 
+  const height = 1;
 
   const geometry = new THREE.CylinderBufferGeometry(radius, radius, height, 8);
   const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
   const cylinder = new THREE.Mesh(geometry, material);
 
-
   cylinder.visible = true;
 
   return cylinder;
 }
-
 
 function updateLine(matrix) {
   if (!currentLine || measurements.length === 0) return;
@@ -85,12 +133,10 @@ function updateLine(matrix) {
   );
   currentLine.setRotationFromQuaternion(quat);
 
-
   currentLine.scale.set(1, length, 1);
 
   currentLine.updateMatrixWorld();
 }
-
 
 function initReticle() {
   let ring = new THREE.RingBufferGeometry(0.045, 0.05, 32).rotateX(
@@ -181,14 +227,15 @@ function onSelect() {
     measurements.push(matrixToVector(reticle.matrix));
     if (measurements.length == 2) {
       let distance = Math.round(getDistance(measurements) * 100);
+      const message = distance + " cm";
 
-      let text = document.createElement("div");
-      text.className = "label";
-      text.style.color = "rgb(255,255,255)";
-      text.textContent = distance + " cm";
-      document.querySelector("#container").appendChild(text);
+      const center = getCenterPoint(measurements);
 
-      labels.push({ div: text, point: getCenterPoint(measurements) });
+      const sprite = createLabelSprite(message);
+      sprite.position.copy(center);
+
+      scene.add(sprite);
+      labels.push(sprite);
 
       measurements = [];
       currentLine = null;
@@ -244,14 +291,6 @@ function render(timestamp, frame) {
         updateLine(reticle.matrix);
       }
     }
-
-    labels.map((label) => {
-      let pos = toScreenPosition(label.point, renderer.xr.getCamera(camera));
-      let x = pos.x;
-      let y = pos.y;
-      label.div.style.transform =
-        "translate(-50%, -50%) translate(" + x + "px," + y + "px)";
-    });
   }
   renderer.render(scene, camera);
 }
