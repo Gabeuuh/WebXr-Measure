@@ -131,21 +131,51 @@ function initObjects() {
 
 function createLabel(val) {
   const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
   canvas.width = 256;
   canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return new THREE.Sprite();
+  }
+
+  const drawRoundedRect = (context, x, y, w, h, r) => {
+    const radius = Math.min(r, w / 2, h / 2);
+    context.beginPath();
+    if (context.roundRect) {
+      context.roundRect(x, y, w, h, radius);
+    } else {
+      context.moveTo(x + radius, y);
+      context.lineTo(x + w - radius, y);
+      context.quadraticCurveTo(x + w, y, x + w, y + radius);
+      context.lineTo(x + w, y + h - radius);
+      context.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+      context.lineTo(x + radius, y + h);
+      context.quadraticCurveTo(x, y + h, x, y + h - radius);
+      context.lineTo(x, y + radius);
+      context.quadraticCurveTo(x, y, x + radius, y);
+    }
+    context.closePath();
+  };
+
   ctx.fillStyle = "rgba(0,0,0,0.7)";
-  ctx.beginPath();
-  ctx.roundRect(0, 0, 256, 128, 20);
+  drawRoundedRect(ctx, 0, 0, canvas.width, canvas.height, 20);
   ctx.fill();
   ctx.font = "bold 60px Arial";
   ctx.fillStyle = "white";
   ctx.textAlign = "center";
-  ctx.fillText(`${val} cm`, 128, 80);
+  ctx.textBaseline = "middle";
+  ctx.fillText(`${val} cm`, canvas.width / 2, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
   const sprite = new THREE.Sprite(
     new THREE.SpriteMaterial({
-      map: new THREE.CanvasTexture(canvas),
+      map: texture,
       depthTest: false,
+      depthWrite: false,
+      transparent: true,
     })
   );
   sprite.scale.set(0.2, 0.1, 1);
