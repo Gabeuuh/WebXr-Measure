@@ -7,7 +7,8 @@ export function createCaptureManager({ renderer, scene }) {
     new THREE.PlaneGeometry(2, 2),
     new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false })
   );
-  const bgScene = new THREE.Scene().add(quad);
+  const bgScene = new THREE.Scene();
+  bgScene.add(quad);
   const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
   function capture(frame) {
@@ -19,31 +20,48 @@ export function createCaptureManager({ renderer, scene }) {
     if (!cameraTexture) return;
 
     const { width, height } = pose.views[0].viewport;
-    if (!renderTarget || renderTarget.width !== width) {
+    if (
+      !renderTarget ||
+      renderTarget.width !== width ||
+      renderTarget.height !== height
+    ) {
+      if (renderTarget) renderTarget.dispose();
       renderTarget = new THREE.WebGLRenderTarget(width, height);
     }
 
     quad.material.map = cameraTexture;
+    quad.material.needsUpdate = true;
 
-    // --- ÉTAPE CRUCIALE : ESCAPER LE MODE XR ---
     const wasXREnabled = renderer.xr.enabled;
-    renderer.xr.enabled = false; // Désactive temporairement le traitement XR
+    const prevRenderTarget = renderer.getRenderTarget();
+    const prevViewport = renderer.getViewport(new THREE.Vector4());
+    const prevScissor = renderer.getScissor(new THREE.Vector4());
+    const prevScissorTest = renderer.getScissorTest();
+    const prevAutoClear = renderer.autoClear;
+
+    renderer.xr.enabled = false;
+    renderer.autoClear = true;
 
     renderer.setRenderTarget(renderTarget);
-    renderer.clear();
+    renderer.setViewport(0, 0, width, height);
+    renderer.setScissor(0, 0, width, height);
+    renderer.setScissorTest(false);
+    renderer.clear(true, true, true);
 
-    // Rendu de la vidéo
+    // Render the camera feed
     renderer.render(bgScene, orthoCam);
-    // Rendu des mesures
+    // Render measurements on top
     renderer.render(scene, xrCamera);
 
     const pixels = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, pixels);
 
-    // --- RESTAURATION TOTALE ---
-    renderer.setRenderTarget(null);
-    renderer.xr.enabled = wasXREnabled; // Réactive XR
-    renderer.state.reset(); // Nettoie le cache WebGL
+    renderer.setRenderTarget(prevRenderTarget);
+    renderer.setViewport(prevViewport);
+    renderer.setScissor(prevScissor);
+    renderer.setScissorTest(prevScissorTest);
+    renderer.autoClear = prevAutoClear;
+    renderer.xr.enabled = wasXREnabled;
 
     save(pixels, width, height);
   }
@@ -53,6 +71,8 @@ export function createCaptureManager({ renderer, scene }) {
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
     const imgData = ctx.createImageData(width, height);
     for (let y = 0; y < height; y++) {
       const srcIdx = (height - 1 - y) * width * 4;
@@ -60,6 +80,7 @@ export function createCaptureManager({ renderer, scene }) {
     }
     ctx.putImageData(imgData, 0, 0);
     canvas.toBlob((blob) => {
+      if (!blob) return;
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = `mesure-${Date.now()}.png`;
