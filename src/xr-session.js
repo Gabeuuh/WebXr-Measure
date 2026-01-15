@@ -95,9 +95,12 @@ function createLabelSprite(message) {
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
+    depthTest: false,
+    depthWrite: false,
   });
 
   const sprite = new THREE.Sprite(material);
+  sprite.renderOrder = 999;
 
   const scale = 0.06;
   const aspect = w / h;
@@ -692,15 +695,28 @@ function onSelect() {
       const sprite = createLabelSprite(message);
 
       const center = getCenterPoint(measurements);
+      const xrCamera = renderer.xr.getCamera(camera);
+      const cameraDir = new THREE.Vector3();
+      xrCamera.getWorldDirection(cameraDir);
+      const cameraUp = new THREE.Vector3(0, 1, 0)
+        .applyQuaternion(xrCamera.quaternion)
+        .normalize();
+      const lineDir = new THREE.Vector3()
+        .subVectors(measurements[1], measurements[0])
+        .normalize();
+      const offsetDir = new THREE.Vector3().crossVectors(lineDir, cameraDir);
+      if (offsetDir.lengthSq() < 1e-6) {
+        offsetDir.copy(cameraUp);
+      } else {
+        offsetDir.normalize();
+        if (offsetDir.dot(cameraUp) < 0) {
+          offsetDir.multiplyScalar(-1);
+        }
+      }
+      const labelOffset = offsetDir.multiplyScalar(0.04);
+      const cameraOffset = cameraDir.clone().multiplyScalar(-0.04);
 
-      const upOffset = new THREE.Vector3(0, 0.05, 0); // 5 cm au-dessus
-
-      const cameraOffset = new THREE.Vector3();
-      renderer.xr.getCamera(camera).getWorldDirection(cameraOffset);
-      cameraOffset.multiplyScalar(-0.015); // 1.5 cm vers la camÃ©ra
-
-      sprite.position.copy(center.clone().add(upOffset).add(cameraOffset));
-
+      sprite.position.copy(center.clone().add(labelOffset).add(cameraOffset));
       scene.add(sprite);
       labels.push(sprite);
 
@@ -767,4 +783,5 @@ function render(timestamp, frame) {
 }
 
 export { initXR };
+
 
