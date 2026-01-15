@@ -170,16 +170,19 @@ function createLabel(val) {
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
   texture.generateMipmaps = false;
-  const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: texture,
-      depthTest: false,
-      depthWrite: false,
-      transparent: true,
-    })
-  );
-  sprite.scale.set(0.2, 0.1, 1);
-  return sprite;
+  texture.needsUpdate = true;
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    depthTest: false,
+    depthWrite: false,
+    transparent: true,
+  });
+  material.needsUpdate = true;
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.1), material);
+  label.onBeforeRender = (_renderer, _scene, cam) => {
+    label.quaternion.copy(cam.quaternion);
+  };
+  return label;
 }
 
 function updateLine(matrix) {
