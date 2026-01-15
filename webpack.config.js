@@ -7,7 +7,7 @@ module.exports = {
   output: {
     filename: "[name].bundle.js",
     path: path.resolve(__dirname, "dist"),
-    clean: true, // Nettoie le dossier dist à chaque build
+    clean: true, // Remplace CleanWebpackPlugin
   },
   module: {
     rules: [
@@ -16,9 +16,7 @@ module.exports = {
         exclude: /node_modules/,
         use: {
           loader: "babel-loader",
-          options: {
-            presets: ["@babel/preset-env"], // Permet d'utiliser ?. et ??
-          },
+          options: { presets: ["@babel/preset-env"] },
         },
       },
       {
@@ -30,12 +28,10 @@ module.exports = {
   devServer: {
     static: "./",
     hot: true,
-    server: "https", 
-    host: "0.0.0.0",
+    server: "https",
   },
   plugins: [
     new HtmlWebpackPlugin({
-      filename: "index.html",
       template: "index.html",
     }),
   ],
