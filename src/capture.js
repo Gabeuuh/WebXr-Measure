@@ -3,52 +3,49 @@ import * as THREE from "three";
 export function createCaptureManager({ renderer, scene }) {
   let captureRequested = false;
   let renderTarget = null;
-
   const quad = new THREE.Mesh(
     new THREE.PlaneGeometry(2, 2),
     new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false })
   );
+  const bgScene = new THREE.Scene().add(quad);
+  const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
   function capture(frame) {
     const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
     if (!pose) return;
 
     const xrCamera = renderer.xr.getCamera();
-    // API r172 : Récupère la texture de la caméra déjà orientée
     const cameraTexture = renderer.xr.getCameraTexture(xrCamera.cameras[0]);
     if (!cameraTexture) return;
 
     const { width, height } = pose.views[0].viewport;
-    if (!renderTarget)
+    if (!renderTarget || renderTarget.width !== width) {
       renderTarget = new THREE.WebGLRenderTarget(width, height);
+    }
 
     quad.material.map = cameraTexture;
-    const originalAutoClear = renderer.autoClear;
+
+    // --- ÉTAPE CRUCIALE : ESCAPER LE MODE XR ---
+    const wasXREnabled = renderer.xr.enabled;
+    renderer.xr.enabled = false; // Désactive temporairement le traitement XR
 
     renderer.setRenderTarget(renderTarget);
-    renderer.autoClear = false;
     renderer.clear();
 
-    // Rendu du fond (Vidéo)
-    const bgScene = new THREE.Scene().add(quad);
-    renderer.render(bgScene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
-
-    // Rendu des mesures (3D)
+    // Rendu de la vidéo
+    renderer.render(bgScene, orthoCam);
+    // Rendu des mesures
     renderer.render(scene, xrCamera);
 
-    // Lecture sécurisée des pixels
     const pixels = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, pixels);
 
-    save(pixels, width, height);
-
-    // --- CORRECTION CRITIQUE POUR SUPPRIMER LE PETIT RECTANGLE ---
+    // --- RESTAURATION TOTALE ---
     renderer.setRenderTarget(null);
-    renderer.state.reset(); // On réinitialise l'état WebGL
-    renderer.autoClear = originalAutoClear;
+    renderer.xr.enabled = wasXREnabled; // Réactive XR
+    renderer.state.reset(); // Nettoie le cache WebGL
 
-    // On force le moteur à repasser en plein écran pour l'affichage du téléphone
-    renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+    save(pixels, width, height);
   }
 
   function save(pixels, width, height) {
@@ -57,18 +54,17 @@ export function createCaptureManager({ renderer, scene }) {
     canvas.height = height;
     const ctx = canvas.getContext("2d");
     const imgData = ctx.createImageData(width, height);
-
     for (let y = 0; y < height; y++) {
       const srcIdx = (height - 1 - y) * width * 4;
       imgData.data.set(pixels.slice(srcIdx, srcIdx + width * 4), y * width * 4);
     }
-
     ctx.putImageData(imgData, 0, 0);
     canvas.toBlob((blob) => {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = `mesure-${Date.now()}.png`;
       a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }, "image/png");
   }
 
