@@ -1,31 +1,42 @@
-const path = require('path');
-const webpack = require('webpack');
-const HtmlWebpackPlugin = require('html-webpack-plugin');
+const path = require("path");
+const HtmlWebpackPlugin = require("html-webpack-plugin");
 
 module.exports = {
-  entry: ['@babel/polyfill', 'webxr-polyfill', './src/index.js'],
+  mode: "development",
+  entry: "./src/index.js",
   output: {
-    filename: '[name].bundle.js',
-    path: path.resolve(__dirname, 'dist')
+    filename: "[name].bundle.js",
+    path: path.resolve(__dirname, "dist"),
+    clean: true, // Nettoie le dossier dist à chaque build
   },
   module: {
     rules: [
       {
+        test: /\.js$/,
+        exclude: /node_modules/,
+        use: {
+          loader: "babel-loader",
+          options: {
+            presets: ["@babel/preset-env"], // Permet d'utiliser ?. et ??
+          },
+        },
+      },
+      {
         test: /\.css$/,
-        use: ['style-loader', 'css-loader'],
+        use: ["style-loader", "css-loader"],
       },
     ],
   },
   devServer: {
-    contentBase: path.resolve(__dirname, '.'),
-    hot: true
+    static: "./",
+    hot: true,
+    server: "https", 
+    host: "0.0.0.0",
   },
   plugins: [
     new HtmlWebpackPlugin({
-      filename: 'index.html',
-      template: 'index.html'
+      filename: "index.html",
+      template: "index.html",
     }),
-    new webpack.NamedModulesPlugin(),
-    new webpack.HotModuleReplacementPlugin()
-  ]
+  ],
 };
