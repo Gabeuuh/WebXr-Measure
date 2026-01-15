@@ -23,6 +23,9 @@ let captureRequested = false;
 let capturePipeline = null;
 let cameraCaptureCanvas = null;
 let cameraCaptureCtx = null;
+let overlayTarget = null;
+let overlayCaptureCanvas = null;
+let overlayCaptureCtx = null;
 let compositeCanvas = null;
 let compositeCtx = null;
 
@@ -352,6 +355,63 @@ function getCameraCanvas(width, height, pixels) {
   return cameraCaptureCanvas;
 }
 
+function ensureOverlayTarget(width, height) {
+  if (!overlayTarget) {
+    overlayTarget = new THREE.WebGLRenderTarget(width, height, {
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+      depthBuffer: true,
+      stencilBuffer: false,
+    });
+  }
+  if (overlayTarget.width !== width || overlayTarget.height !== height) {
+    overlayTarget.setSize(width, height);
+  }
+}
+
+function captureOverlayPixels(width, height) {
+  ensureOverlayTarget(width, height);
+
+  const xrCamera = renderer.xr.getCamera(camera);
+  const prevXrEnabled = renderer.xr.enabled;
+  const prevAutoClear = renderer.autoClear;
+
+  renderer.xr.enabled = false;
+  renderer.autoClear = true;
+  renderer.setRenderTarget(overlayTarget);
+  renderer.clear(true, true, true);
+  renderer.render(scene, xrCamera);
+  renderer.setRenderTarget(null);
+  renderer.xr.enabled = prevXrEnabled;
+  renderer.autoClear = prevAutoClear;
+
+  const pixels = new Uint8Array(width * height * 4);
+  renderer.readRenderTargetPixels(overlayTarget, 0, 0, width, height, pixels);
+  return pixels;
+}
+
+function getOverlayCanvas(width, height, pixels) {
+  if (!overlayCaptureCanvas) {
+    overlayCaptureCanvas = document.createElement("canvas");
+    overlayCaptureCtx = overlayCaptureCanvas.getContext("2d");
+  }
+  if (
+    overlayCaptureCanvas.width !== width ||
+    overlayCaptureCanvas.height !== height
+  ) {
+    overlayCaptureCanvas.width = width;
+    overlayCaptureCanvas.height = height;
+  }
+
+  const imageData = new ImageData(
+    flipPixelData(pixels, width, height),
+    width,
+    height
+  );
+  overlayCaptureCtx.putImageData(imageData, 0, 0);
+  return overlayCaptureCanvas;
+}
+
 function getCompositeCanvas(width, height) {
   if (!compositeCanvas) {
     compositeCanvas = document.createElement("canvas");
@@ -477,6 +537,22 @@ function captureComposite(frame) {
       pixels
     );
 
+    let overlayCanvas = null;
+    try {
+      const overlayPixels = captureOverlayPixels(
+        capturePipeline.width,
+        capturePipeline.height
+      );
+      overlayCanvas = getOverlayCanvas(
+        capturePipeline.width,
+        capturePipeline.height,
+        overlayPixels
+      );
+    } catch (err) {
+      console.warn("Overlay capture failed, using canvas only.", err);
+      overlayCanvas = renderer.domElement;
+    }
+
     const outputCanvas = getCompositeCanvas(
       renderer.domElement.width,
       renderer.domElement.height
@@ -489,13 +565,15 @@ function captureComposite(frame) {
       outputCanvas.width,
       outputCanvas.height
     );
-    compositeCtx.drawImage(
-      renderer.domElement,
-      0,
-      0,
-      outputCanvas.width,
-      outputCanvas.height
-    );
+    if (overlayCanvas) {
+      compositeCtx.drawImage(
+        overlayCanvas,
+        0,
+        0,
+        outputCanvas.width,
+        outputCanvas.height
+      );
+    }
 
     downloadDataUrl(outputCanvas.toDataURL("image/png"));
   } catch (err) {
