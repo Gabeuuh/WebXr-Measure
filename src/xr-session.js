@@ -7,6 +7,8 @@ let camera,
   renderer,
   reticle,
   hitTestSource = null;
+let measurements = [];
+let currentLine = null;
 let captureManager;
 
 export function initXR() {
@@ -19,17 +21,18 @@ export function initXR() {
   );
 
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
   document.body.appendChild(renderer.domElement);
 
   captureManager = createCaptureManager({ renderer, scene });
 
-  // UI (Overlay)
+  // UI (Overlay) - pointer-events:none est CRUCIAL pour pouvoir cliquer au sol
   const ui = document.createElement("div");
   ui.id = "ui-overlay";
   ui.style.cssText =
-    "position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;";
+    "position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:10;";
   document.body.appendChild(ui);
 
   const btn = document.createElement("button");
@@ -50,6 +53,12 @@ export function initXR() {
   );
 
   initObjects();
+
+  // RÉINTÉGRATION : Écouteur pour poser les points
+  const controller = renderer.xr.getController(0);
+  controller.addEventListener("select", onSelect);
+  scene.add(controller);
+
   renderer.setAnimationLoop(render);
 }
 
@@ -71,6 +80,8 @@ function render(timestamp, frame) {
         reticle.matrix.fromArray(
           results[0].getPose(referenceSpace).transform.matrix
         );
+        // Mise à jour de la ligne "en élastique"
+        if (currentLine) updateLine(reticle.matrix);
       } else {
         reticle.visible = false;
       }
@@ -78,6 +89,33 @@ function render(timestamp, frame) {
     captureManager.handleFrame(frame);
   }
   renderer.render(scene, camera);
+}
+
+function onSelect() {
+  if (!reticle.visible) return;
+  const pos = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
+  measurements.push(pos);
+
+  if (measurements.length === 2) {
+    // Calcul de la distance
+    const dist = Math.round(measurements[0].distanceTo(measurements[1]) * 100);
+    const sprite = createLabel(dist);
+    const center = new THREE.Vector3()
+      .addVectors(measurements[0], measurements[1])
+      .multiplyScalar(0.5);
+    sprite.position.copy(center).add(new THREE.Vector3(0, 0.05, 0));
+    scene.add(sprite);
+
+    measurements = [];
+    currentLine = null;
+  } else {
+    // Début d'une nouvelle mesure
+    currentLine = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.003, 0.003, 1),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    scene.add(currentLine);
+  }
 }
 
 function initObjects() {
@@ -88,6 +126,41 @@ function initObjects() {
   reticle.matrixAutoUpdate = false;
   reticle.visible = false;
   scene.add(reticle);
-
   scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
+}
+
+function createLabel(val) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  canvas.width = 256;
+  canvas.height = 128;
+  ctx.fillStyle = "rgba(0,0,0,0.7)";
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 256, 128, 20);
+  ctx.fill();
+  ctx.font = "bold 60px Arial";
+  ctx.fillStyle = "white";
+  ctx.textAlign = "center";
+  ctx.fillText(`${val} cm`, 128, 80);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(canvas),
+      depthTest: false,
+    })
+  );
+  sprite.scale.set(0.2, 0.1, 1);
+  return sprite;
+}
+
+function updateLine(matrix) {
+  if (!currentLine || measurements.length === 0) return;
+  const start = measurements[0];
+  const end = new THREE.Vector3().setFromMatrixPosition(matrix);
+  const dir = new THREE.Vector3().subVectors(end, start);
+  currentLine.position.copy(start).add(dir.clone().multiplyScalar(0.5));
+  currentLine.quaternion.setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    dir.clone().normalize()
+  );
+  currentLine.scale.set(1, dir.length(), 1);
 }
