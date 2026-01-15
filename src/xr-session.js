@@ -229,9 +229,9 @@ function initXR() {
 
   document.body.appendChild(
     ARButton.createButton(renderer, {
-      optionalFeatures: ["dom-overlay", "camera-access"],
+      optionalFeatures: ["dom-overlay"],
+      requiredFeatures: ["hit-test", "camera-access"], 
       domOverlay: { root: document.querySelector("#container") },
-      requiredFeatures: ["hit-test"],
     })
   );
 
@@ -354,5 +354,3 @@ function render(timestamp, frame) {
 }
 
 export { initXR };
-
-
