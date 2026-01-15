@@ -218,7 +218,6 @@ function initXR() {
   container.appendChild(renderer.domElement);
   captureManager = createCaptureManager({
     renderer,
-    baseCamera: camera,
     scene,
   });
 
@@ -230,7 +229,7 @@ function initXR() {
   document.body.appendChild(
     ARButton.createButton(renderer, {
       optionalFeatures: ["dom-overlay"],
-      requiredFeatures: ["hit-test", "camera-access"], 
+      requiredFeatures: ["hit-test", "camera-access"],
       domOverlay: { root: document.querySelector("#container") },
     })
   );
