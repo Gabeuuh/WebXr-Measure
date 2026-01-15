@@ -167,7 +167,7 @@ function initPhotoButton() {
   labelContainer.appendChild(btn);
 
   btn.addEventListener("click", (e) => {
-    e.stopPropagation();
+    e.stopImmediatePropagation();
     e.preventDefault();
 
     if (!renderer) return;
@@ -178,7 +178,7 @@ function initPhotoButton() {
   });
   ["pointerdown", "touchstart"].forEach((evtName) => {
     btn.addEventListener(evtName, (e) => {
-      e.stopPropagation();
+      e.stopImmediatePropagation();
     });
   });
 }

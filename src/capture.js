@@ -39,6 +39,7 @@ export function createCaptureManager({ renderer, scene }) {
     gl.attachShader(program, fs);
     gl.linkProgram(program);
 
+    // UVs corrigés pour éviter l'inversion
     const vertices = new Float32Array([
       -1, -1, 0, 1, 1, -1, 1, 1, -1, 1, 0, 0, 1, 1, 1, 0,
     ]);
@@ -61,15 +62,22 @@ export function createCaptureManager({ renderer, scene }) {
 
     const { width, height } = view.viewport;
 
+    // Initialisation sécurisée du Target
     if (!renderTarget || renderTarget.width !== width) {
       renderTarget = new THREE.WebGLRenderTarget(width, height);
     }
 
-    // 1. Préparer le rendu dans le Target Three.js
+    // --- ÉTAPE 1 : Préparation du Target ---
+    // On force Three.js à préparer le buffer interne
     renderer.setRenderTarget(renderTarget);
-    renderer.state.reset(); // Très important pour synchroniser Three.js et WebGL manuel
 
-    // 2. Dessiner la caméra (Background) via WebGL pur
+    // On récupère le framebuffer proprement
+    const currentFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, currentFramebuffer);
+
+    // --- ÉTAPE 2 : Dessiner la vidéo ---
+    renderer.state.reset();
+    gl.viewport(0, 0, width, height);
     gl.useProgram(pipeline.program);
     gl.bindBuffer(gl.ARRAY_BUFFER, pipeline.buffer);
     gl.enableVertexAttribArray(0);
@@ -83,24 +91,25 @@ export function createCaptureManager({ renderer, scene }) {
     gl.disable(gl.DEPTH_TEST);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-    // 3. Dessiner la scène Three.js par-dessus
+    // --- ÉTAPE 3 : Dessiner les annotations ---
     const xrCamera = renderer.xr.getCamera();
     renderer.autoClear = false;
     renderer.render(scene, xrCamera);
 
-    // 4. Lire les pixels via la méthode native de Three.js (plus fiable)
+    // --- ÉTAPE 4 : Lecture optimisée ---
     const pixels = new Uint8Array(width * height * 4);
-    renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, pixels);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
-    // Nettoyage de l'état
+    // Nettoyage immédiat pour libérer le GPU
     renderer.setRenderTarget(null);
     renderer.autoClear = true;
     renderer.state.reset();
 
-    saveImage(pixels, width, height);
+    // Utilisation d'un Blob (plus léger que DataURL)
+    saveAsBlob(pixels, width, height);
   }
 
-  function saveImage(pixels, width, height) {
+  function saveAsBlob(pixels, width, height) {
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -109,10 +118,15 @@ export function createCaptureManager({ renderer, scene }) {
     imageData.data.set(pixels);
     ctx.putImageData(imageData, 0, 0);
 
-    const link = document.createElement("a");
-    link.download = `mesure-ar-${Date.now()}.png`;
-    link.href = canvas.toDataURL("image/png");
-    link.click();
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.download = `mesure-${Date.now()}.png`;
+      link.href = url;
+      link.click();
+      // Libérer la mémoire après le téléchargement
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, "image/png");
   }
 
   return {
