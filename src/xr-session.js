@@ -5,6 +5,9 @@ import { BufferGeometryUtils } from "three/examples/jsm/utils/BufferGeometryUtil
 let container, labelContainer;
 let camera, scene, renderer, light;
 let controller;
+let xrSession = null;
+let xrBinding = null;
+let gl = null;
 
 let hitTestSource = null;
 let hitTestSourceRequested = false;
@@ -16,6 +19,12 @@ let reticle;
 let currentLine = null;
 
 let width, height;
+let captureRequested = false;
+let capturePipeline = null;
+let cameraCaptureCanvas = null;
+let cameraCaptureCtx = null;
+let compositeCanvas = null;
+let compositeCtx = null;
 
 function toScreenPosition(point, camera) {
   var vector = new THREE.Vector3();
@@ -156,6 +165,8 @@ function initRenderer() {
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
+  renderer.setClearColor(0x000000, 0);
+  gl = renderer.getContext();
 }
 
 function initLabelContainer() {
@@ -164,6 +175,338 @@ function initLabelContainer() {
   labelContainer.style.top = "0px";
   labelContainer.style.pointerEvents = "auto";
   labelContainer.setAttribute("id", "container");
+}
+
+function compileShader(gl, type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const info = gl.getShaderInfoLog(shader);
+    gl.deleteShader(shader);
+    throw new Error(info || "Shader compile failed");
+  }
+  return shader;
+}
+
+function createProgram(gl, vertexSource, fragmentSource) {
+  const program = gl.createProgram();
+  const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
+  const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+  gl.deleteShader(vertexShader);
+  gl.deleteShader(fragmentShader);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const info = gl.getProgramInfoLog(program);
+    gl.deleteProgram(program);
+    throw new Error(info || "Program link failed");
+  }
+  return program;
+}
+
+function createCapturePipeline(gl) {
+  const isWebGL2 =
+    typeof WebGL2RenderingContext !== "undefined" &&
+    gl instanceof WebGL2RenderingContext;
+  const externalExt = gl.getExtension(
+    isWebGL2 ? "OES_EGL_image_external_essl3" : "OES_EGL_image_external"
+  );
+  const useExternal = Boolean(externalExt);
+  const externalTarget =
+    gl.TEXTURE_EXTERNAL_OES ||
+    (externalExt && externalExt.TEXTURE_EXTERNAL_OES);
+
+  const quadData = new Float32Array([
+    -1, -1, 0, 0,
+    1, -1, 1, 0,
+    -1, 1, 0, 1,
+    1, 1, 1, 1,
+  ]);
+
+  const vertexSource = isWebGL2
+    ? `#version 300 es
+in vec2 a_position;
+in vec2 a_texCoord;
+out vec2 v_texCoord;
+void main() {
+  v_texCoord = a_texCoord;
+  gl_Position = vec4(a_position, 0.0, 1.0);
+}`
+    : `attribute vec2 a_position;
+attribute vec2 a_texCoord;
+varying vec2 v_texCoord;
+void main() {
+  v_texCoord = a_texCoord;
+  gl_Position = vec4(a_position, 0.0, 1.0);
+}`;
+
+  const fragmentSource = isWebGL2
+    ? `#version 300 es
+${useExternal ? "#extension GL_OES_EGL_image_external_essl3 : require" : ""}
+precision mediump float;
+in vec2 v_texCoord;
+uniform ${useExternal ? "samplerExternalOES" : "sampler2D"} u_camera;
+out vec4 outColor;
+void main() {
+  outColor = texture(u_camera, v_texCoord);
+}`
+    : `${useExternal ? "#extension GL_OES_EGL_image_external : require" : ""}
+precision mediump float;
+varying vec2 v_texCoord;
+uniform ${useExternal ? "samplerExternalOES" : "sampler2D"} u_camera;
+void main() {
+  gl_FragColor = texture2D(u_camera, v_texCoord);
+}`;
+
+  const program = createProgram(gl, vertexSource, fragmentSource);
+  const buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, quadData, gl.STATIC_DRAW);
+
+  return {
+    program,
+    buffer,
+    attribs: {
+      position: gl.getAttribLocation(program, "a_position"),
+      texCoord: gl.getAttribLocation(program, "a_texCoord"),
+    },
+    uniforms: {
+      camera: gl.getUniformLocation(program, "u_camera"),
+    },
+    framebuffer: gl.createFramebuffer(),
+    outputTexture: gl.createTexture(),
+    textureTarget: useExternal && externalTarget ? externalTarget : gl.TEXTURE_2D,
+    width: 0,
+    height: 0,
+  };
+}
+
+function ensureCaptureTarget(gl, pipeline, width, height) {
+  if (pipeline.width === width && pipeline.height === height) {
+    return;
+  }
+
+  pipeline.width = width;
+  pipeline.height = height;
+
+  gl.bindTexture(gl.TEXTURE_2D, pipeline.outputTexture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA,
+    width,
+    height,
+    0,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    null
+  );
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, pipeline.framebuffer);
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER,
+    gl.COLOR_ATTACHMENT0,
+    gl.TEXTURE_2D,
+    pipeline.outputTexture,
+    0
+  );
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+function flipPixelData(pixels, width, height) {
+  const rowSize = width * 4;
+  const flipped = new Uint8ClampedArray(pixels.length);
+  for (let y = 0; y < height; y++) {
+    const src = y * rowSize;
+    const dest = (height - 1 - y) * rowSize;
+    flipped.set(pixels.subarray(src, src + rowSize), dest);
+  }
+  return flipped;
+}
+
+function getCameraCanvas(width, height, pixels) {
+  if (!cameraCaptureCanvas) {
+    cameraCaptureCanvas = document.createElement("canvas");
+    cameraCaptureCtx = cameraCaptureCanvas.getContext("2d");
+  }
+  if (
+    cameraCaptureCanvas.width !== width ||
+    cameraCaptureCanvas.height !== height
+  ) {
+    cameraCaptureCanvas.width = width;
+    cameraCaptureCanvas.height = height;
+  }
+
+  const imageData = new ImageData(
+    flipPixelData(pixels, width, height),
+    width,
+    height
+  );
+  cameraCaptureCtx.putImageData(imageData, 0, 0);
+  return cameraCaptureCanvas;
+}
+
+function getCompositeCanvas(width, height) {
+  if (!compositeCanvas) {
+    compositeCanvas = document.createElement("canvas");
+    compositeCtx = compositeCanvas.getContext("2d");
+  }
+  if (compositeCanvas.width !== width || compositeCanvas.height !== height) {
+    compositeCanvas.width = width;
+    compositeCanvas.height = height;
+  }
+  return compositeCanvas;
+}
+
+function downloadDataUrl(dataUrl) {
+  const a = document.createElement("a");
+  const canDownload = "download" in a;
+
+  if (canDownload) {
+    a.href = dataUrl;
+    a.download = `measure-${Date.now()}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } else {
+    window.open(dataUrl, "_blank");
+  }
+}
+
+function fallbackCapture() {
+  const canvas = renderer.domElement;
+  const dataUrl = canvas.toDataURL("image/png");
+  downloadDataUrl(dataUrl);
+}
+
+function captureComposite(frame) {
+  if (!frame || !xrBinding) {
+    fallbackCapture();
+    return;
+  }
+
+  const referenceSpace = renderer.xr.getReferenceSpace();
+  const pose = frame.getViewerPose(referenceSpace);
+  if (!pose || !pose.views.length || !pose.views[0].camera) {
+    fallbackCapture();
+    return;
+  }
+
+  const xrCamera = pose.views[0].camera;
+  const cameraWidth = xrCamera.width;
+  const cameraHeight = xrCamera.height;
+
+  if (!cameraWidth || !cameraHeight) {
+    fallbackCapture();
+    return;
+  }
+
+  try {
+    if (!capturePipeline) {
+      capturePipeline = createCapturePipeline(gl);
+    }
+    ensureCaptureTarget(gl, capturePipeline, cameraWidth, cameraHeight);
+
+    const cameraTexture = xrBinding.getCameraImage(xrCamera);
+    if (!cameraTexture) {
+      fallbackCapture();
+      return;
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, capturePipeline.framebuffer);
+    gl.viewport(0, 0, capturePipeline.width, capturePipeline.height);
+    gl.useProgram(capturePipeline.program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, capturePipeline.buffer);
+
+    const stride = 4 * Float32Array.BYTES_PER_ELEMENT;
+    gl.enableVertexAttribArray(capturePipeline.attribs.position);
+    gl.vertexAttribPointer(
+      capturePipeline.attribs.position,
+      2,
+      gl.FLOAT,
+      false,
+      stride,
+      0
+    );
+    gl.enableVertexAttribArray(capturePipeline.attribs.texCoord);
+    gl.vertexAttribPointer(
+      capturePipeline.attribs.texCoord,
+      2,
+      gl.FLOAT,
+      false,
+      stride,
+      2 * Float32Array.BYTES_PER_ELEMENT
+    );
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(capturePipeline.textureTarget, cameraTexture);
+    gl.uniform1i(capturePipeline.uniforms.camera, 0);
+
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    const pixels = new Uint8Array(
+      capturePipeline.width * capturePipeline.height * 4
+    );
+    gl.readPixels(
+      0,
+      0,
+      capturePipeline.width,
+      capturePipeline.height,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      pixels
+    );
+
+    gl.bindTexture(capturePipeline.textureTarget, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (renderer.resetState) {
+      renderer.resetState();
+    }
+
+    const cameraCanvas = getCameraCanvas(
+      capturePipeline.width,
+      capturePipeline.height,
+      pixels
+    );
+
+    const outputCanvas = getCompositeCanvas(
+      renderer.domElement.width,
+      renderer.domElement.height
+    );
+    compositeCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+    compositeCtx.drawImage(
+      cameraCanvas,
+      0,
+      0,
+      outputCanvas.width,
+      outputCanvas.height
+    );
+    compositeCtx.drawImage(
+      renderer.domElement,
+      0,
+      0,
+      outputCanvas.width,
+      outputCanvas.height
+    );
+
+    downloadDataUrl(outputCanvas.toDataURL("image/png"));
+  } catch (err) {
+    console.error("AR capture failed, falling back to WebGL only.", err);
+    fallbackCapture();
+  }
+}
+
+function requestCapture() {
+  if (captureRequested) return;
+  captureRequested = true;
 }
 
 function initPhotoButton() {
@@ -180,27 +523,8 @@ function initPhotoButton() {
 
     if (!renderer) return;
 
-    try {
-      const canvas = renderer.domElement;
-      const dataUrl = canvas.toDataURL("image/png");
-
-      const a = document.createElement("a");
-      const canDownload = "download" in a;
-
-      if (canDownload) {
-        a.href = dataUrl;
-        a.download = `measure-${Date.now()}.png`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      } else {
-        window.open(dataUrl, "_blank");
-      }
-    } catch (err) {
-      console.error("Erreur lors de la capture d'écran AR :", err);
-    }
+    requestCapture();
   });
-
   ["pointerdown", "touchstart"].forEach((evtName) => {
     btn.addEventListener(evtName, (e) => {
       e.stopPropagation();
@@ -249,11 +573,25 @@ function initXR() {
 
   document.body.appendChild(
     ARButton.createButton(renderer, {
-      optionalFeatures: ["dom-overlay"],
+      optionalFeatures: ["dom-overlay", "camera-access"],
       domOverlay: { root: document.querySelector("#container") },
       requiredFeatures: ["hit-test"],
     })
   );
+
+  renderer.xr.addEventListener("sessionstart", () => {
+    xrSession = renderer.xr.getSession();
+    if (typeof XRWebGLBinding !== "undefined" && gl) {
+      xrBinding = new XRWebGLBinding(xrSession, gl);
+    } else {
+      xrBinding = null;
+    }
+  });
+
+  renderer.xr.addEventListener("sessionend", () => {
+    xrSession = null;
+    xrBinding = null;
+  });
 
   controller = renderer.xr.getController(0);
   controller.addEventListener("select", onSelect);
@@ -281,7 +619,7 @@ function onSelect() {
 
       const cameraOffset = new THREE.Vector3();
       renderer.xr.getCamera(camera).getWorldDirection(cameraOffset);
-      cameraOffset.multiplyScalar(-0.015); // 1.5 cm vers la caméra
+      cameraOffset.multiplyScalar(-0.015); // 1.5 cm vers la camÃ©ra
 
       sprite.position.copy(center.clone().add(upOffset).add(cameraOffset));
 
@@ -344,6 +682,11 @@ function render(timestamp, frame) {
     }
   }
   renderer.render(scene, camera);
+  if (captureRequested) {
+    captureRequested = false;
+    captureComposite(frame);
+  }
 }
 
 export { initXR };
+
