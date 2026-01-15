@@ -42,8 +42,13 @@ export function createCaptureManager({ renderer, scene }) {
 
     save(pixels, width, height);
 
+    // --- CORRECTION CRITIQUE POUR SUPPRIMER LE PETIT RECTANGLE ---
     renderer.setRenderTarget(null);
+    renderer.state.reset(); // On réinitialise l'état WebGL
     renderer.autoClear = originalAutoClear;
+
+    // On force le moteur à repasser en plein écran pour l'affichage du téléphone
+    renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
   }
 
   function save(pixels, width, height) {
