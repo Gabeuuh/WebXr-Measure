@@ -3,249 +3,72 @@ import { ARButton } from "three/examples/jsm/webxr/ARButton.js";
 import { BufferGeometryUtils } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { createCaptureManager } from "./capture";
 
-let container, labelContainer;
-let camera, scene, renderer, light;
-let controller;
+// Variables globales du moteur
+let camera, scene, renderer, controller;
 let captureManager = null;
-
 let hitTestSource = null;
 let hitTestSourceRequested = false;
 
+// Variables de mesure
 let measurements = [];
-
 let reticle;
 let currentLine = null;
 
-let width, height;
+/**
+ * Initialisation principale de l'application XR
+ */
+export function initXR() {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
 
-function getCenterPoint(points) {
-  let line = new THREE.Line3(...points);
-  return line.getCenter();
-}
-
-function matrixToVector(matrix) {
-  let vector = new THREE.Vector3();
-  vector.setFromMatrixPosition(matrix);
-  return vector;
-}
-
-function createLabelSprite(message) {
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-
-  const fontSize = 64;
-  ctx.font = `${fontSize}px sans-serif`;
-  const textWidth = ctx.measureText(message).width;
-
-  canvas.width = textWidth + fontSize;
-  canvas.height = fontSize * 1.6;
-
-  ctx.font = `${fontSize}px sans-serif`;
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "center";
-
-  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-  const radius = fontSize * 0.4;
-  const w = canvas.width;
-  const h = canvas.height;
-
-  ctx.beginPath();
-  ctx.moveTo(radius, 0);
-  ctx.lineTo(w - radius, 0);
-  ctx.quadraticCurveTo(w, 0, w, radius);
-  ctx.lineTo(w, h - radius);
-  ctx.quadraticCurveTo(w, h, w - radius, h);
-  ctx.lineTo(radius, h);
-  ctx.quadraticCurveTo(0, h, 0, h - radius);
-  ctx.lineTo(0, radius);
-  ctx.quadraticCurveTo(0, 0, radius, 0);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = "white";
-  ctx.fillText(message, w / 2, h / 2);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-
-  const material = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    depthTest: false,
-    depthWrite: false,
-  });
-
-  const sprite = new THREE.Sprite(material);
-  sprite.renderOrder = 999;
-
-  const scale = 0.06;
-  const aspect = w / h;
-  sprite.scale.set(scale * aspect, scale, 1);
-
-  return sprite;
-}
-
-function initLine() {
-  const radius = 0.003;
-  const height = 1;
-
-  const geometry = new THREE.CylinderBufferGeometry(radius, radius, height, 8);
-  const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
-
-  const cylinder = new THREE.Mesh(geometry, material);
-
-  cylinder.visible = true;
-
-  return cylinder;
-}
-
-function updateLine(matrix) {
-  if (!currentLine || measurements.length === 0) return;
-
-  const start = measurements[0];
-
-  const end = new THREE.Vector3(
-    matrix.elements[12],
-    matrix.elements[13],
-    matrix.elements[14]
+  // 1. Scène et Caméra de base
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(
+    70,
+    window.innerWidth / window.innerHeight,
+    0.01,
+    20
   );
 
-  const dir = new THREE.Vector3().subVectors(end, start);
-  const length = dir.length();
-  if (length === 0) return;
+  const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+  light.position.set(0.5, 1, 0.25);
+  scene.add(light);
 
-  const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
-  currentLine.position.copy(mid);
-
-  const up = new THREE.Vector3(0, 1, 0);
-  const quat = new THREE.Quaternion().setFromUnitVectors(
-    up,
-    dir.clone().normalize()
-  );
-  currentLine.setRotationFromQuaternion(quat);
-
-  currentLine.scale.set(1, length, 1);
-
-  currentLine.updateMatrixWorld();
-}
-
-function initReticle() {
-  let ring = new THREE.RingBufferGeometry(0.045, 0.05, 32).rotateX(
-    -Math.PI / 2
-  );
-  let dot = new THREE.CircleBufferGeometry(0.005, 32).rotateX(-Math.PI / 2);
-  reticle = new THREE.Mesh(
-    BufferGeometryUtils.mergeBufferGeometries([ring, dot]),
-    new THREE.MeshBasicMaterial()
-  );
-  reticle.matrixAutoUpdate = false;
-  reticle.visible = false;
-}
-
-function initRenderer() {
+  // 2. Renderer avec WebXR activé
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
-  renderer.setClearColor(0x000000, 0);
-}
-
-function initLabelContainer() {
-  labelContainer = document.createElement("div");
-  labelContainer.style.position = "absolute";
-  labelContainer.style.top = "0px";
-  labelContainer.style.pointerEvents = "auto";
-  labelContainer.setAttribute("id", "container");
-}
-
-function initPhotoButton() {
-  const btn = document.createElement("button");
-  btn.id = "photo-btn";
-  btn.type = "button";
-  btn.textContent = " ";
-
-  labelContainer.appendChild(btn);
-
-  btn.addEventListener("click", (e) => {
-    e.stopImmediatePropagation();
-    e.preventDefault();
-
-    if (!renderer) return;
-
-    if (captureManager) {
-      captureManager.requestCapture();
-    }
-  });
-  ["pointerdown", "touchstart"].forEach((evtName) => {
-    btn.addEventListener(evtName, (e) => {
-      e.stopImmediatePropagation();
-    });
-  });
-}
-
-function initCamera() {
-  camera = new THREE.PerspectiveCamera(70, width / height, 0.01, 20);
-}
-
-function initLight() {
-  light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
-  light.position.set(0.5, 1, 0.25);
-}
-
-function initScene() {
-  scene = new THREE.Scene();
-}
-
-function getDistance(points) {
-  if (points.length == 2) return points[0].distanceTo(points[1]);
-}
-
-function initXR() {
-  container = document.createElement("div");
-  document.body.appendChild(container);
-
-  width = window.innerWidth;
-  height = window.innerHeight;
-
-  initScene();
-
-  initCamera();
-
-  initLight();
-  scene.add(light);
-
-  initRenderer();
   container.appendChild(renderer.domElement);
-  captureManager = createCaptureManager({
-    renderer,
-    scene,
-  });
 
-  initLabelContainer();
+  // 3. Manager de Capture (Logique Raw Camera Access / PR #31487)
+  captureManager = createCaptureManager({ renderer, scene });
+
+  // 4. Interface Utilisateur (DOM Overlay)
+  const labelContainer = document.createElement("div");
+  labelContainer.id = "container";
   container.appendChild(labelContainer);
 
-  initPhotoButton();
+  initPhotoButton(labelContainer);
 
+  // 5. Configuration du Bouton AR avec accès caméra obligatoire
   document.body.appendChild(
     ARButton.createButton(renderer, {
-      optionalFeatures: ["dom-overlay"],
       requiredFeatures: ["hit-test", "camera-access"],
-      domOverlay: { root: document.querySelector("#container") },
+      optionalFeatures: ["dom-overlay"],
+      domOverlay: { root: labelContainer },
     })
   );
 
-  renderer.xr.addEventListener("sessionstart", () => {
-    if (captureManager) {
-      captureManager.onSessionStart();
-    }
-  });
+  // 6. Gestionnaires d'événements de session
+  renderer.xr.addEventListener("sessionstart", () =>
+    captureManager?.onSessionStart()
+  );
+  renderer.xr.addEventListener("sessionend", () =>
+    captureManager?.onSessionEnd()
+  );
 
-  renderer.xr.addEventListener("sessionend", () => {
-    if (captureManager) {
-      captureManager.onSessionEnd();
-    }
-  });
-
+  // 7. Interactions et Objets AR
   controller = renderer.xr.getController(0);
   controller.addEventListener("select", onSelect);
   scene.add(controller);
@@ -254,102 +77,164 @@ function initXR() {
   scene.add(reticle);
 
   window.addEventListener("resize", onWindowResize, false);
-  animate();
+
+  // Lancement de la boucle de rendu
+  renderer.setAnimationLoop(render);
 }
 
+/**
+ * Boucle de rendu XR
+ */
+function render(timestamp, frame) {
+  if (frame) {
+    const session = renderer.xr.getSession();
+    const referenceSpace = renderer.xr.getReferenceSpace();
+
+    // Gestion du Hit-Test pour placer les points
+    if (!hitTestSourceRequested) {
+      session.requestReferenceSpace("viewer").then((space) => {
+        session.requestHitTestSource({ space }).then((source) => {
+          hitTestSource = source;
+        });
+      });
+      hitTestSourceRequested = true;
+    }
+
+    if (hitTestSource) {
+      const results = frame.getHitTestResults(hitTestSource);
+      if (results.length) {
+        const hit = results[0];
+        reticle.visible = true;
+        reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+
+        // Mise à jour de la ligne en temps réel pendant la mesure
+        if (currentLine) updateLine(reticle.matrix);
+      } else {
+        reticle.visible = false;
+      }
+    }
+
+    // Gestion de la capture (fusion caméra + 3D) si demandée
+    if (captureManager) {
+      captureManager.handleFrame(frame);
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+/**
+ * Initialisation du bouton photo avec protection contre les clics AR
+ */
+function initPhotoButton(parent) {
+  const btn = document.createElement("button");
+  btn.id = "photo-btn";
+  btn.textContent = " "; // Stylisé par styles.css
+  parent.appendChild(btn);
+
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation(); // Empêche de poser un point de mesure sous le bouton
+    if (captureManager) captureManager.requestCapture();
+  });
+}
+
+/**
+ * Gestion du clic pour mesurer
+ */
 function onSelect() {
   if (reticle.visible) {
-    measurements.push(matrixToVector(reticle.matrix));
-    if (measurements.length == 2) {
-      let distance = Math.round(getDistance(measurements) * 100);
-      const message = distance + " cm";
+    const position = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
+    measurements.push(position);
 
-      const sprite = createLabelSprite(message);
+    if (measurements.length === 2) {
+      // Calcul et affichage de la mesure
+      const distance = Math.round(
+        measurements[0].distanceTo(measurements[1]) * 100
+      );
+      const sprite = createLabelSprite(`${distance} cm`);
 
-      const center = getCenterPoint(measurements);
-      const xrCamera = renderer.xr.getCamera(camera);
-      const cameraDir = new THREE.Vector3();
-      xrCamera.getWorldDirection(cameraDir);
-      const cameraUp = new THREE.Vector3(0, 1, 0)
-        .applyQuaternion(xrCamera.quaternion)
-        .normalize();
-      const lineDir = new THREE.Vector3()
-        .subVectors(measurements[1], measurements[0])
-        .normalize();
-      const offsetDir = new THREE.Vector3().crossVectors(lineDir, cameraDir);
-      if (offsetDir.lengthSq() < 1e-6) {
-        offsetDir.copy(cameraUp);
-      } else {
-        offsetDir.normalize();
-        if (offsetDir.dot(cameraUp) < 0) {
-          offsetDir.multiplyScalar(-1);
-        }
-      }
-      const labelOffset = offsetDir.multiplyScalar(0.04);
-      const cameraOffset = cameraDir.clone().multiplyScalar(-0.04);
+      const center = new THREE.Vector3()
+        .addVectors(measurements[0], measurements[1])
+        .multiplyScalar(0.5);
+      sprite.position.copy(center).add(new THREE.Vector3(0, 0.05, 0)); // Offset vers le haut
 
-      sprite.position.copy(center.clone().add(labelOffset).add(cameraOffset));
       scene.add(sprite);
 
       measurements = [];
       currentLine = null;
     } else {
+      // Début d'une nouvelle ligne
       currentLine = initLine();
       scene.add(currentLine);
     }
   }
 }
 
+// --- FONCTIONS HELPERS (Mesures et Visuels) ---
+
+function createLabelSprite(message) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  ctx.font = "64px sans-serif";
+  const textWidth = ctx.measureText(message).width;
+
+  canvas.width = textWidth + 64;
+  canvas.height = 100;
+
+  ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
+  ctx.roundRect(0, 0, canvas.width, canvas.height, 20);
+  ctx.fill();
+
+  ctx.fillStyle = "white";
+  ctx.font = "64px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(message, canvas.width / 2, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: texture, depthTest: false })
+  );
+  sprite.scale.set(0.1 * (canvas.width / canvas.height), 0.1, 1);
+  return sprite;
+}
+
+function initLine() {
+  const geometry = new THREE.CylinderGeometry(0.003, 0.003, 1, 8);
+  const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const cylinder = new THREE.Mesh(geometry, material);
+  return cylinder;
+}
+
+function updateLine(matrix) {
+  if (!currentLine || measurements.length === 0) return;
+  const start = measurements[0];
+  const end = new THREE.Vector3().setFromMatrixPosition(matrix);
+  const dir = new THREE.Vector3().subVectors(end, start);
+  const length = dir.length();
+
+  currentLine.position.copy(start).add(dir.clone().multiplyScalar(0.5));
+  currentLine.quaternion.setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    dir.clone().normalize()
+  );
+  currentLine.scale.set(1, length, 1);
+}
+
+function initReticle() {
+  const ring = new THREE.RingGeometry(0.045, 0.05, 32).rotateX(-Math.PI / 2);
+  const dot = new THREE.CircleGeometry(0.005, 32).rotateX(-Math.PI / 2);
+  reticle = new THREE.Mesh(
+    BufferGeometryUtils.mergeBufferGeometries([ring, dot]),
+    new THREE.MeshBasicMaterial()
+  );
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+}
+
 function onWindowResize() {
-  width = window.innerWidth;
-  height = window.innerHeight;
-  camera.aspect = width / height;
+  camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(width, height);
+  renderer.setSize(window.innerWidth, window.innerHeight);
 }
-
-function animate() {
-  renderer.setAnimationLoop(render);
-}
-
-function render(timestamp, frame) {
-  if (frame) {
-    let referenceSpace = renderer.xr.getReferenceSpace();
-    let session = renderer.xr.getSession();
-    if (hitTestSourceRequested === false) {
-      session.requestReferenceSpace("viewer").then(function (referenceSpace) {
-        session
-          .requestHitTestSource({ space: referenceSpace })
-          .then(function (source) {
-            hitTestSource = source;
-          });
-      });
-      session.addEventListener("end", function () {
-        hitTestSourceRequested = false;
-        hitTestSource = null;
-      });
-      hitTestSourceRequested = true;
-    }
-
-    if (hitTestSource) {
-      let hitTestResults = frame.getHitTestResults(hitTestSource);
-      if (hitTestResults.length) {
-        let hit = hitTestResults[0];
-        reticle.visible = true;
-        reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-      } else {
-        reticle.visible = false;
-      }
-
-      if (currentLine) {
-        updateLine(reticle.matrix);
-      }
-    }
-  }
-  renderer.render(scene, camera);
-  if (captureManager) {
-    captureManager.handleFrame(frame);
-  }
-}
-
-export { initXR };
