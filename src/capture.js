@@ -1,9 +1,8 @@
 import * as THREE from "three";
 
-// Shaders pour dessiner la texture externe de la caméra
 const vertexShader = `#version 300 es
-  in vec2 position;
-  in vec2 uv;
+  layout(location = 0) in vec2 position;
+  layout(location = 1) in vec2 uv;
   out vec2 vUv;
   void main() {
     vUv = uv;
@@ -17,22 +16,21 @@ const fragmentShader = `#version 300 es
   in vec2 vUv;
   out vec4 outColor;
   void main() {
-    // Note: On inverse l'axe Y car les textures WebXR sont souvent inversées
-    outColor = texture(uCameraTexture, vec2(vUv.x, 1.0 - vUv.y));
+    // Note: Pas d'inversion ici, on gère l'orientation dans les vertices
+    outColor = texture(uCameraTexture, vUv);
   }`;
 
-export function createCaptureManager({ renderer, scene, baseCamera }) {
+export function createCaptureManager({ renderer, scene }) {
   const gl = renderer.getContext();
   let xrBinding = null;
-  let captureRequested = false;
   let pipeline = null;
+  let captureRequested = false;
+  let renderTarget = null;
 
-  // Initialisation du programme de rendu "fond de caméra"
   function initPipeline() {
     const vs = gl.createShader(gl.VERTEX_SHADER);
     gl.shaderSource(vs, vertexShader);
     gl.compileShader(vs);
-
     const fs = gl.createShader(gl.FRAGMENT_SHADER);
     gl.shaderSource(fs, fragmentShader);
     gl.compileShader(fs);
@@ -42,8 +40,24 @@ export function createCaptureManager({ renderer, scene, baseCamera }) {
     gl.attachShader(program, fs);
     gl.linkProgram(program);
 
+    // On définit les UVs pour que l'image soit dans le bon sens (WebGL vs Texture)
     const vertices = new Float32Array([
-      -1, -1, 0, 0, 1, -1, 1, 0, -1, 1, 0, 1, 1, 1, 1, 1,
+      -1,
+      -1,
+      0,
+      1, // Bas-Gauche (UV inversé en Y)
+      1,
+      -1,
+      1,
+      1, // Bas-Droite
+      -1,
+      1,
+      0,
+      0, // Haut-Gauche
+      1,
+      1,
+      1,
+      0, // Haut-Droite
     ]);
 
     const buffer = gl.createBuffer();
@@ -60,24 +74,36 @@ export function createCaptureManager({ renderer, scene, baseCamera }) {
 
     const view = pose.views[0];
     const cameraTexture = xrBinding.getCameraImage(view.camera);
-    if (!cameraTexture) return;
+    if (!cameraTexture) {
+      console.error("Impossible d'accéder à la texture caméra.");
+      return;
+    }
 
-    const baseLayer = session.renderState.baseLayer;
-    const width = baseLayer.framebufferWidth;
-    const height = baseLayer.framebufferHeight;
+    const width = view.viewport.width;
+    const height = view.viewport.height;
 
-    // Étape A : Dessiner la caméra dans le framebuffer
-    gl.bindFramebuffer(gl.FRAMEBUFFER, baseLayer.framebuffer);
+    // Créer ou redimensionner le Target de capture si besoin
+    if (!renderTarget || renderTarget.width !== width) {
+      renderTarget = new THREE.WebGLRenderTarget(width, height);
+    }
+
+    // --- ÉTAPE 1 : Reset de l'état Three.js ---
+    renderer.state.reset();
+
+    // --- ÉTAPE 2 : Dessiner le fond (Caméra) ---
+    gl.bindFramebuffer(
+      gl.FRAMEBUFFER,
+      renderer.properties.get(renderTarget).__webglFramebuffer
+    );
     gl.viewport(0, 0, width, height);
+
     gl.useProgram(pipeline.program);
     gl.bindBuffer(gl.ARRAY_BUFFER, pipeline.buffer);
 
-    const posLoc = gl.getAttribLocation(pipeline.program, "position");
-    const uvLoc = gl.getAttribLocation(pipeline.program, "uv");
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 16, 0);
-    gl.enableVertexAttribArray(uvLoc);
-    gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 16, 8);
+    gl.enableVertexAttribArray(0); // position
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(1); // uv
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_EXTERNAL_OES, cameraTexture);
@@ -86,19 +112,26 @@ export function createCaptureManager({ renderer, scene, baseCamera }) {
     gl.disable(gl.DEPTH_TEST);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-    // Étape B : Dessiner les annotations Three.js par-dessus
-    const autoClear = renderer.autoClear;
-    renderer.autoClear = false; // Ne pas effacer la vidéo qu'on vient de dessiner
-    renderer.clearDepth(); // Effacer seulement la profondeur
-    renderer.render(scene, baseCamera);
-    renderer.autoClear = autoClear;
+    // --- ÉTAPE 3 : Dessiner les annotations ---
+    // On utilise la caméra XR de Three.js qui contient les bonnes matrices
+    const xrCamera = renderer.xr.getCamera();
 
-    // Étape C : Lire les pixels fusionnés
+    renderer.setRenderTarget(renderTarget);
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(scene, xrCamera);
+    renderer.setRenderTarget(null);
+
+    // --- ÉTAPE 4 : Lecture et Sauvegarde ---
     const pixels = new Uint8Array(width * height * 4);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
     gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
-    // Conversion et téléchargement
     saveImage(pixels, width, height);
+
+    // Restaurer l'état pour le rendu normal de la boucle Three.js
+    renderer.autoClear = true;
+    renderer.state.reset();
   }
 
   function saveImage(pixels, width, height) {
@@ -107,21 +140,11 @@ export function createCaptureManager({ renderer, scene, baseCamera }) {
     canvas.height = height;
     const ctx = canvas.getContext("2d");
     const imageData = ctx.createImageData(width, height);
-
-    // Correction de l'inversion verticale WebGL
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const i = (y * width + x) * 4;
-        const j = ((height - 1 - y) * width + x) * 4;
-        imageData.data[i] = pixels[j];
-        imageData.data[i + 1] = pixels[j + 1];
-        imageData.data[i + 2] = pixels[j + 2];
-        imageData.data[i + 3] = pixels[j + 3];
-      }
-    }
+    imageData.data.set(pixels);
     ctx.putImageData(imageData, 0, 0);
+
     const link = document.createElement("a");
-    link.download = `mesure-${Date.now()}.png`;
+    link.download = `mesure-ar-${Date.now()}.png`;
     link.href = canvas.toDataURL();
     link.click();
   }
@@ -130,7 +153,7 @@ export function createCaptureManager({ renderer, scene, baseCamera }) {
     onSessionStart: () => {
       initPipeline();
       const session = renderer.xr.getSession();
-      if (session) xrBinding = new XRWebGLBinding(session, gl);
+      xrBinding = new XRWebGLBinding(session, gl);
     },
     onSessionEnd: () => {
       xrBinding = null;
