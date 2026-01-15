@@ -16,7 +16,6 @@ const fragmentShader = `#version 300 es
   in vec2 vUv;
   out vec4 outColor;
   void main() {
-    // Note: Pas d'inversion ici, on gère l'orientation dans les vertices
     outColor = texture(uCameraTexture, vUv);
   }`;
 
@@ -40,24 +39,8 @@ export function createCaptureManager({ renderer, scene }) {
     gl.attachShader(program, fs);
     gl.linkProgram(program);
 
-    // On définit les UVs pour que l'image soit dans le bon sens (WebGL vs Texture)
     const vertices = new Float32Array([
-      -1,
-      -1,
-      0,
-      1, // Bas-Gauche (UV inversé en Y)
-      1,
-      -1,
-      1,
-      1, // Bas-Droite
-      -1,
-      1,
-      0,
-      0, // Haut-Gauche
-      1,
-      1,
-      1,
-      0, // Haut-Droite
+      -1, -1, 0, 1, 1, -1, 1, 1, -1, 1, 0, 0, 1, 1, 1, 0,
     ]);
 
     const buffer = gl.createBuffer();
@@ -74,37 +57,25 @@ export function createCaptureManager({ renderer, scene }) {
 
     const view = pose.views[0];
     const cameraTexture = xrBinding.getCameraImage(view.camera);
-    if (!cameraTexture) {
-      console.error("Impossible d'accéder à la texture caméra.");
-      return;
-    }
+    if (!cameraTexture) return;
 
-    const width = view.viewport.width;
-    const height = view.viewport.height;
+    const { width, height } = view.viewport;
 
-    // Créer ou redimensionner le Target de capture si besoin
     if (!renderTarget || renderTarget.width !== width) {
       renderTarget = new THREE.WebGLRenderTarget(width, height);
     }
 
-    // --- ÉTAPE 1 : Reset de l'état Three.js ---
-    renderer.state.reset();
+    // 1. Préparer le rendu dans le Target Three.js
+    renderer.setRenderTarget(renderTarget);
+    renderer.state.reset(); // Très important pour synchroniser Three.js et WebGL manuel
 
-    // --- ÉTAPE 2 : Dessiner le fond (Caméra) ---
-    gl.bindFramebuffer(
-      gl.FRAMEBUFFER,
-      renderer.properties.get(renderTarget).__webglFramebuffer
-    );
-    gl.viewport(0, 0, width, height);
-
+    // 2. Dessiner la caméra (Background) via WebGL pur
     gl.useProgram(pipeline.program);
     gl.bindBuffer(gl.ARRAY_BUFFER, pipeline.buffer);
-
-    gl.enableVertexAttribArray(0); // position
+    gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
-    gl.enableVertexAttribArray(1); // uv
+    gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
-
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_EXTERNAL_OES, cameraTexture);
     gl.uniform1i(gl.getUniformLocation(pipeline.program, "uCameraTexture"), 0);
@@ -112,26 +83,21 @@ export function createCaptureManager({ renderer, scene }) {
     gl.disable(gl.DEPTH_TEST);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-    // --- ÉTAPE 3 : Dessiner les annotations ---
-    // On utilise la caméra XR de Three.js qui contient les bonnes matrices
+    // 3. Dessiner la scène Three.js par-dessus
     const xrCamera = renderer.xr.getCamera();
-
-    renderer.setRenderTarget(renderTarget);
     renderer.autoClear = false;
-    renderer.clearDepth();
     renderer.render(scene, xrCamera);
-    renderer.setRenderTarget(null);
 
-    // --- ÉTAPE 4 : Lecture et Sauvegarde ---
+    // 4. Lire les pixels via la méthode native de Three.js (plus fiable)
     const pixels = new Uint8Array(width * height * 4);
-    gl.readBuffer(gl.COLOR_ATTACHMENT0);
-    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, pixels);
 
-    saveImage(pixels, width, height);
-
-    // Restaurer l'état pour le rendu normal de la boucle Three.js
+    // Nettoyage de l'état
+    renderer.setRenderTarget(null);
     renderer.autoClear = true;
     renderer.state.reset();
+
+    saveImage(pixels, width, height);
   }
 
   function saveImage(pixels, width, height) {
@@ -145,7 +111,7 @@ export function createCaptureManager({ renderer, scene }) {
 
     const link = document.createElement("a");
     link.download = `mesure-ar-${Date.now()}.png`;
-    link.href = canvas.toDataURL();
+    link.href = canvas.toDataURL("image/png");
     link.click();
   }
 
