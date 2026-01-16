@@ -21,86 +21,64 @@ export function createCaptureManager({ renderer, scene }) {
     const pose = frame.getViewerPose(refSpace);
     if (!pose) return;
 
+    const session = renderer.xr.getSession();
+    const baseLayer = session.renderState.baseLayer;
+
     const view = pose.views[0];
-    const xrCameraForView = view.camera; // <-- Raw Camera Access API
-    if (!xrCameraForView) {
-      if (!warnedMissingCamera) {
-        console.warn(
-          "camera-access actif, mais view.camera est null. Browser/device ne supporte pas Raw Camera Access."
-        );
-        warnedMissingCamera = true;
-      }
-      return;
-    }
+    const viewport = baseLayer.getViewport(view);
+    const width = Math.floor(viewport.width);
+    const height = Math.floor(viewport.height);
+
+    const xrCameraForView = view.camera;
+    if (!xrCameraForView) return;
 
     const binding = renderer.xr.getBinding?.();
-    if (!binding || typeof binding.getCameraImage !== "function") {
-      if (!warnedMissingCamera) {
-        console.warn(
-          "XRWebGLBinding.getCameraImage indisponible. (Raw Camera Access non supporté / flag / device)."
-        );
-        warnedMissingCamera = true;
-      }
-      return;
-    }
+    if (!binding?.getCameraImage) return;
 
-    const webglTex = binding.getCameraImage(xrCameraForView); // WebGLTexture
+    const webglTex = binding.getCameraImage(xrCameraForView);
     if (!webglTex) return;
 
     if (!externalCameraTexture) {
       externalCameraTexture = new THREE.ExternalTexture(webglTex);
     } else {
-      externalCameraTexture.sourceTexture = webglTex;
+      // fallback robuste selon versions/impl
       externalCameraTexture.needsUpdate = true;
     }
 
-    // La taille : ton code utilise pose.views[0].viewport, mais viewport n’est pas standard ici.
-    // Le plus robuste est de prendre la size caméra (spec) :
-    const width = xrCameraForView.width;
-    const height = xrCameraForView.height;
+    quad.frustumCulled = false;
+    quad.material.side = THREE.DoubleSide;
+    quad.material.map = externalCameraTexture;
+    quad.material.needsUpdate = true;
 
     if (
       !renderTarget ||
       renderTarget.width !== width ||
       renderTarget.height !== height
     ) {
-      if (renderTarget) renderTarget.dispose();
+      renderTarget?.dispose();
       renderTarget = new THREE.WebGLRenderTarget(width, height);
     }
 
-    quad.material.map = externalCameraTexture;
-    quad.material.needsUpdate = true;
-
-    const xrCamera = renderer.xr.getCamera(); // caméra three (stereo wrapper)
+    const xrCamera = renderer.xr.getCamera();
     const wasXREnabled = renderer.xr.enabled;
     const prevRenderTarget = renderer.getRenderTarget();
-    const prevViewport = renderer.getViewport(new THREE.Vector4());
-    const prevScissor = renderer.getScissor(new THREE.Vector4());
-    const prevScissorTest = renderer.getScissorTest();
-    const prevAutoClear = renderer.autoClear;
 
     renderer.xr.enabled = false;
-    renderer.autoClear = true;
 
     renderer.setRenderTarget(renderTarget);
     renderer.setViewport(0, 0, width, height);
-    renderer.setScissor(0, 0, width, height);
     renderer.setScissorTest(false);
+
+    renderer.setClearAlpha(1);
     renderer.clear(true, true, true);
 
-    // 1) caméra réelle
     renderer.render(bgScene, orthoCam);
-    // 2) tes mesures par-dessus
     renderer.render(scene, xrCamera);
 
     const pixels = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, pixels);
 
     renderer.setRenderTarget(prevRenderTarget);
-    renderer.setViewport(prevViewport);
-    renderer.setScissor(prevScissor);
-    renderer.setScissorTest(prevScissorTest);
-    renderer.autoClear = prevAutoClear;
     renderer.xr.enabled = wasXREnabled;
 
     save(pixels, width, height);
