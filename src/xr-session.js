@@ -10,6 +10,7 @@ let camera,
 let measurements = [];
 let currentLine = null;
 let captureManager;
+let suppressSelect = false;
 
 export function initXR() {
   scene = new THREE.Scene();
@@ -38,9 +39,20 @@ export function initXR() {
   const btn = document.createElement("button");
   btn.id = "photo-btn"; // Styles dans styles.css
   btn.style.pointerEvents = "auto";
+  const suppressSelectOnce = () => {
+    suppressSelect = true;
+    requestAnimationFrame(() => {
+      suppressSelect = false;
+    });
+  };
+  btn.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    suppressSelectOnce();
+  });
   btn.onclick = (e) => {
     e.stopPropagation();
     captureManager.requestCapture();
+    suppressSelectOnce();
   };
   ui.appendChild(btn);
 
@@ -92,6 +104,7 @@ function render(timestamp, frame) {
 }
 
 function onSelect() {
+  if (suppressSelect) return;
   if (!reticle.visible) return;
   const pos = new THREE.Vector3().setFromMatrixPosition(reticle.matrix);
   measurements.push(pos);
