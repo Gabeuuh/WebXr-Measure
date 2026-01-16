@@ -22,6 +22,17 @@ export function createCaptureManager({ renderer, scene }) {
   bgScene.add(quad);
   const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
+  const flashOverlay = document.createElement("div");
+  flashOverlay.id = "photo-flash";
+  flashOverlay.setAttribute("aria-hidden", "true");
+  document.body.appendChild(flashOverlay);
+
+  const triggerFlash = () => {
+    flashOverlay.classList.remove("flash-active");
+    void flashOverlay.offsetWidth;
+    flashOverlay.classList.add("flash-active");
+  };
+
   function capture(frame) {
     const refSpace = renderer.xr.getReferenceSpace();
     const pose = frame.getViewerPose(refSpace);
@@ -97,6 +108,7 @@ export function createCaptureManager({ renderer, scene }) {
     renderer.setRenderTarget(prevRenderTarget);
     renderer.xr.enabled = wasXREnabled;
 
+    triggerFlash();
     save(pixels, width, height);
   }
 

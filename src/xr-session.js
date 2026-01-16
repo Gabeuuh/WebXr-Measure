@@ -38,6 +38,8 @@ export function initXR() {
 
   const btn = document.createElement("button");
   btn.id = "photo-btn"; // Styles dans styles.css
+  btn.type = "button";
+  btn.setAttribute("aria-label", "Prendre une photo");
   btn.style.pointerEvents = "auto";
   btn.addEventListener("beforexrselect", (e) => {
     console.log("button clicked")
@@ -60,13 +62,37 @@ export function initXR() {
   };
   ui.appendChild(btn);
 
-  document.body.appendChild(
-    ARButton.createButton(renderer, {
-      requiredFeatures: ["hit-test", "camera-access"],
-      optionalFeatures: ["dom-overlay"],
-      domOverlay: { root: ui },
-    })
-  );
+  const landing = document.querySelector("#landing");
+  const landingActions = document.querySelector("#landing-actions");
+  const arButton = ARButton.createButton(renderer, {
+    requiredFeatures: ["hit-test", "camera-access"],
+    optionalFeatures: ["dom-overlay"],
+    domOverlay: { root: ui },
+  });
+
+  if (landingActions) {
+    landingActions.appendChild(arButton);
+  } else {
+    document.body.appendChild(arButton);
+  }
+
+  const setArActive = (isActive) => {
+    document.body.classList.toggle("ar-active", isActive);
+    if (landing) {
+      landing.setAttribute("aria-hidden", isActive ? "true" : "false");
+    }
+    if (landingActions) {
+      if (isActive) {
+        document.body.appendChild(arButton);
+      } else {
+        landingActions.appendChild(arButton);
+      }
+    }
+  };
+
+  setArActive(false);
+  renderer.xr.addEventListener("sessionstart", () => setArActive(true));
+  renderer.xr.addEventListener("sessionend", () => setArActive(false));
 
   initObjects();
 
