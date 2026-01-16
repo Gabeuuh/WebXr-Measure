@@ -12,6 +12,12 @@ export function createCaptureManager({ renderer, scene }) {
     new THREE.PlaneGeometry(2, 2),
     new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false })
   );
+  quad.frustumCulled = false;
+  quad.material.depthTest = false;
+  quad.material.depthWrite = false;
+  quad.material.side = THREE.DoubleSide;
+  quad.renderOrder = -999;
+
   const bgScene = new THREE.Scene();
   bgScene.add(quad);
   const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -63,17 +69,27 @@ export function createCaptureManager({ renderer, scene }) {
     const wasXREnabled = renderer.xr.enabled;
     const prevRenderTarget = renderer.getRenderTarget();
 
+    const prevAutoClear = renderer.autoClear;
+    const prevClearAlpha = renderer.getClearAlpha();
+
     renderer.xr.enabled = false;
 
     renderer.setRenderTarget(renderTarget);
     renderer.setViewport(0, 0, width, height);
     renderer.setScissorTest(false);
 
+    renderer.autoClear = false;
     renderer.setClearAlpha(1);
     renderer.clear(true, true, true);
 
+    // 1) Fond caméra
     renderer.render(bgScene, orthoCam);
+
+    // 2) Tes mesures par-dessus (SANS effacer le fond)
     renderer.render(scene, xrCamera);
+
+    renderer.autoClear = prevAutoClear;
+    renderer.setClearAlpha(prevClearAlpha);
 
     const pixels = new Uint8Array(width * height * 4);
     renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, pixels);
