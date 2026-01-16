@@ -3,7 +3,11 @@ import * as THREE from "three";
 export function createCaptureManager({ renderer, scene }) {
   let captureRequested = false;
   let renderTarget = null;
-  let warnedMissingCameraTexture = false;
+  let warnedMissingCamera = false;
+
+  // On garde une ExternalTexture réutilisable
+  let externalCameraTexture = null;
+
   const quad = new THREE.Mesh(
     new THREE.PlaneGeometry(2, 2),
     new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false })
@@ -13,25 +17,48 @@ export function createCaptureManager({ renderer, scene }) {
   const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
   function capture(frame) {
-    const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
+    const refSpace = renderer.xr.getReferenceSpace();
+    const pose = frame.getViewerPose(refSpace);
     if (!pose) return;
 
-    const xrCamera = renderer.xr.getCamera();
-    console.log("XR Camera : ", xrCamera);
-    if (typeof renderer.xr.getCameraTexture !== "function") {
-      if (!warnedMissingCameraTexture) {
+    const view = pose.views[0];
+    const xrCameraForView = view.camera; // <-- Raw Camera Access API
+    if (!xrCameraForView) {
+      if (!warnedMissingCamera) {
         console.warn(
-          "Photo capture requires a newer three.js (renderer.xr.getCameraTexture)."
+          "camera-access actif, mais view.camera est null. Browser/device ne supporte pas Raw Camera Access."
         );
-        warnedMissingCameraTexture = true;
+        warnedMissingCamera = true;
       }
       return;
     }
-    const cameraTexture = renderer.xr.getCameraTexture(xrCamera.cameras[0]);
-    console.log("Camera texture : ", cameraTexture);
-    if (!cameraTexture) return;
 
-    const { width, height } = pose.views[0].viewport;
+    const binding = renderer.xr.getBinding?.();
+    if (!binding || typeof binding.getCameraImage !== "function") {
+      if (!warnedMissingCamera) {
+        console.warn(
+          "XRWebGLBinding.getCameraImage indisponible. (Raw Camera Access non supporté / flag / device)."
+        );
+        warnedMissingCamera = true;
+      }
+      return;
+    }
+
+    const webglTex = binding.getCameraImage(xrCameraForView); // WebGLTexture
+    if (!webglTex) return;
+
+    if (!externalCameraTexture) {
+      externalCameraTexture = new THREE.ExternalTexture(webglTex);
+    } else {
+      externalCameraTexture.sourceTexture = webglTex;
+      externalCameraTexture.needsUpdate = true;
+    }
+
+    // La taille : ton code utilise pose.views[0].viewport, mais viewport n’est pas standard ici.
+    // Le plus robuste est de prendre la size caméra (spec) :
+    const width = xrCameraForView.width;
+    const height = xrCameraForView.height;
+
     if (
       !renderTarget ||
       renderTarget.width !== width ||
@@ -41,9 +68,10 @@ export function createCaptureManager({ renderer, scene }) {
       renderTarget = new THREE.WebGLRenderTarget(width, height);
     }
 
-    quad.material.map = cameraTexture;
+    quad.material.map = externalCameraTexture;
     quad.material.needsUpdate = true;
 
+    const xrCamera = renderer.xr.getCamera(); // caméra three (stereo wrapper)
     const wasXREnabled = renderer.xr.enabled;
     const prevRenderTarget = renderer.getRenderTarget();
     const prevViewport = renderer.getViewport(new THREE.Vector4());
@@ -60,9 +88,9 @@ export function createCaptureManager({ renderer, scene }) {
     renderer.setScissorTest(false);
     renderer.clear(true, true, true);
 
-    // Render the camera feed
+    // 1) caméra réelle
     renderer.render(bgScene, orthoCam);
-    // Render measurements on top
+    // 2) tes mesures par-dessus
     renderer.render(scene, xrCamera);
 
     const pixels = new Uint8Array(width * height * 4);
@@ -91,6 +119,7 @@ export function createCaptureManager({ renderer, scene }) {
       imgData.data.set(pixels.slice(srcIdx, srcIdx + width * 4), y * width * 4);
     }
     ctx.putImageData(imgData, 0, 0);
+
     canvas.toBlob((blob) => {
       if (!blob) return;
       const a = document.createElement("a");
@@ -102,14 +131,11 @@ export function createCaptureManager({ renderer, scene }) {
   }
 
   return {
-    requestCapture: () => {
-      captureRequested = true;
-    },
+    requestCapture: () => (captureRequested = true),
     handleFrame: (frame) => {
-      if (captureRequested) {
-        capture(frame);
-        captureRequested = false;
-      }
+      if (!captureRequested) return;
+      capture(frame);
+      captureRequested = false;
     },
   };
 }
