@@ -39,6 +39,10 @@ export function initXR() {
   const btn = document.createElement("button");
   btn.id = "photo-btn"; // Styles dans styles.css
   btn.style.pointerEvents = "auto";
+  btn.addEventListener("beforexrselect", (e) => {
+    console.log("button clicked")
+    e.preventDefault();
+  });
   const suppressSelectOnce = () => {
     suppressSelect = true;
     requestAnimationFrame(() => {
