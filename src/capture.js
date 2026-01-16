@@ -114,25 +114,13 @@ export function createCaptureManager({ renderer, scene }) {
     }
     ctx.putImageData(imgData, 0, 0);
 
-    canvas.toBlob(async (blob) => {
+    canvas.toBlob((blob) => {
       if (!blob) return;
-      const formData = new FormData();
-      formData.append("file", blob, `mesure-${Date.now()}.png`);
-
-      try {
-        const response = await fetch(
-          "https://apizee.app.n8n.cloud/webhook/measure",
-          {
-            method: "POST",
-            body: formData,
-          }
-        );
-        if (!response.ok) {
-          console.warn("Webhook upload failed", response.status);
-        }
-      } catch (err) {
-        console.error("Webhook upload error", err);
-      }
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `mesure-${Date.now()}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }, "image/png");
   }
 
