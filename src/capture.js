@@ -17,6 +17,7 @@ export function createCaptureManager({ renderer, scene }) {
     if (!pose) return;
 
     const xrCamera = renderer.xr.getCamera();
+    console.log("XR Camera : ", xrCamera);
     if (typeof renderer.xr.getCameraTexture !== "function") {
       if (!warnedMissingCameraTexture) {
         console.warn(
@@ -27,6 +28,7 @@ export function createCaptureManager({ renderer, scene }) {
       return;
     }
     const cameraTexture = renderer.xr.getCameraTexture(xrCamera.cameras[0]);
+    console.log("Camera texture : ", cameraTexture);
     if (!cameraTexture) return;
 
     const { width, height } = pose.views[0].viewport;
