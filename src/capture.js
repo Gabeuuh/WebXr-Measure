@@ -27,7 +27,16 @@ export function createCaptureManager({ renderer, scene }) {
   flashOverlay.setAttribute("aria-hidden", "true");
   document.body.appendChild(flashOverlay);
 
+  const ensureFlashRoot = () => {
+    const overlayRoot =
+      document.getElementById("ui-overlay") || document.body;
+    if (flashOverlay.parentElement !== overlayRoot) {
+      overlayRoot.appendChild(flashOverlay);
+    }
+  };
+
   const triggerFlash = () => {
+    ensureFlashRoot();
     flashOverlay.classList.remove("flash-active");
     void flashOverlay.offsetWidth;
     flashOverlay.classList.add("flash-active");
