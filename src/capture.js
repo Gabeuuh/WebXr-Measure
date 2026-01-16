@@ -3,6 +3,7 @@ import * as THREE from "three";
 export function createCaptureManager({ renderer, scene }) {
   let captureRequested = false;
   let renderTarget = null;
+  let warnedMissingCameraTexture = false;
   const quad = new THREE.Mesh(
     new THREE.PlaneGeometry(2, 2),
     new THREE.MeshBasicMaterial({ depthTest: false, depthWrite: false })
@@ -16,6 +17,15 @@ export function createCaptureManager({ renderer, scene }) {
     if (!pose) return;
 
     const xrCamera = renderer.xr.getCamera();
+    if (typeof renderer.xr.getCameraTexture !== "function") {
+      if (!warnedMissingCameraTexture) {
+        console.warn(
+          "Photo capture requires a newer three.js (renderer.xr.getCameraTexture)."
+        );
+        warnedMissingCameraTexture = true;
+      }
+      return;
+    }
     const cameraTexture = renderer.xr.getCameraTexture(xrCamera.cameras[0]);
     if (!cameraTexture) return;
 
